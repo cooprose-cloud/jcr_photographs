@@ -827,31 +827,89 @@ def translate_photo_config(data: dict) -> dict:
     slideshow's internal config format.  Called automatically when the input
     file contains a 'site_info' key.
 
-    Image paths are stored relative to a common media_root so the generated
+    Image paths are stored relative to a media_root so the generated
     slideshow.html stays portable when the folder is moved or shared.
+
+    Two strategies, picked automatically:
+
+    1. **Website-rooted paths** (preferred).  When the config carries an
+       ``output_directory`` (because photos_exposition.py wrote it) and the
+       per-gallery photo copies actually exist under
+       ``<output_directory>/photos/<gallery_id>/<filename>``, image src
+       values are stored as ``photos/<gallery_id>/<filename>`` with
+       media_root set to ``output_directory``.  Result: dropping
+       slideshow.html into the website folder yields a fully self-contained
+       site — the entire ``website/`` directory can be moved, zipped, or
+       hosted as a single unit.
+
+    2. **Source-directory paths** (fallback).  When the website copies
+       aren't there yet (e.g. you ran ``build`` before
+       ``photos_exposition.py``), paths point at the original
+       ``source_directory`` for each gallery, anchored on the common
+       ancestor of all source dirs.
     """
     site   = data.get("site_info", {})
     title  = site.get("title", "Photo Slideshow")
 
-    # First pass: collect resolved (src_dir, filename, note, label) tuples
-    # so we can compute a common media_root across all galleries.
+    # First pass: collect (src_dir, id, filename, note, label) tuples so we
+    # can decide which path strategy to use, then build paths accordingly.
     raw_galleries = []
-    all_src_dirs = []
     for g in data.get("galleries", []):
+        gid         = g.get("id", "")
         src_dir_raw = g.get("source_directory", "")
         src_dir     = Path(src_dir_raw).resolve() if src_dir_raw else Path(".").resolve()
         photos      = g.get("photos",  [])
         notes       = g.get("notes",   {})
-        label       = g.get("name", g.get("id", "Gallery"))
+        label       = g.get("name", gid or "Gallery")
 
         entries = [(filename, notes.get(filename, "")) for filename in photos]
         if entries:
-            raw_galleries.append({"label": label, "src_dir": src_dir, "entries": entries})
-            all_src_dirs.append(src_dir)
+            raw_galleries.append({
+                "label":   label,
+                "id":      gid,
+                "src_dir": src_dir,
+                "entries": entries,
+            })
 
-    # Compute common ancestor of all source directories.  If they span
-    # different drives/filesystems (commonpath raises ValueError) fall back
-    # to absolute paths so nothing breaks — just non-portable.
+    # ── Try strategy 1: website-rooted paths ────────────────────────────
+    output_dir_raw = data.get("output_directory")
+    website_root   = Path(output_dir_raw).resolve() if output_dir_raw else None
+
+    use_website_paths = bool(website_root and raw_galleries)
+    if use_website_paths:
+        for rg in raw_galleries:
+            if not rg["id"]:
+                use_website_paths = False
+                break
+            for filename, _ in rg["entries"]:
+                copy_path = website_root / "photos" / rg["id"] / filename
+                if not copy_path.exists():
+                    use_website_paths = False
+                    break
+            if not use_website_paths:
+                break
+
+    if use_website_paths:
+        galleries = [
+            {
+                "label":  rg["label"],
+                "images": [
+                    {"src": f"photos/{rg['id']}/{filename}", "note": note}
+                    for filename, note in rg["entries"]
+                ],
+            }
+            for rg in raw_galleries
+        ]
+        return {
+            "title":      title,
+            "media_root": str(website_root).replace("\\", "/"),
+            "generated":  "",
+            "galleries":  galleries,
+            "total":      sum(len(g["images"]) for g in galleries),
+        }
+
+    # ── Strategy 2: source-directory paths (fallback) ───────────────────
+    all_src_dirs = [rg["src_dir"] for rg in raw_galleries]
     abs_paths = False
     if all_src_dirs:
         try:
