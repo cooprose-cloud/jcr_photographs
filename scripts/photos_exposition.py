@@ -128,6 +128,7 @@ class PhotoExpositionGenerator:
     --text-color: #333;
     --light-bg: #ecf0f1;
     --border-color: #bdc3c7;
+    --gold: #FFD700;
 }
 
 * {
@@ -163,6 +164,7 @@ header h1 {
     margin-bottom: 10px;
     font-weight: 300;
     letter-spacing: 2px;
+    color: var(--gold);
 }
 
 header h2 {
@@ -204,18 +206,26 @@ header h2 {
 }
 
 .slideshow-slide {
-    display: none;
+    /* All slides are layered on top of each other; opacity decides which
+       is visible. Both the outgoing and incoming slides transition at the
+       same time, giving a true cross-fade. */
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100%;
-    position: relative;
-    animation: fadeIn 1s;
-    background: #000;
-}
-
-.slideshow-slide.active {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: #000;
+    opacity: 0;
+    transition: opacity 1s ease-in-out;
+    pointer-events: none;
+}
+
+.slideshow-slide.active {
+    opacity: 1;
+    pointer-events: auto;
 }
 
 .slideshow-slide img {
@@ -237,11 +247,6 @@ header h2 {
     padding: 15px 20px;
     font-size: 1.1em;
     text-align: center;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
 }
 
 /* Gallery Navigation */
@@ -271,6 +276,7 @@ header h2 {
     background-color: var(--accent-color);
     color: white;
     text-decoration: none;
+    border: 2px solid var(--gold);
     border-radius: 6px;
     font-size: 1em;
     transition: all 0.3s ease;
@@ -369,6 +375,7 @@ header h2 {
     background-color: var(--accent-color);
     color: white;
     text-decoration: none;
+    border: 2px solid var(--gold);
     border-radius: 4px;
     transition: background-color 0.3s ease;
 }
@@ -388,6 +395,10 @@ footer {
 
 footer p {
     margin: 5px 0;
+}
+
+footer strong {
+    color: var(--gold);
 }
 
 /* Zoom — three levels: 1x → 2x → 3x → 1x */

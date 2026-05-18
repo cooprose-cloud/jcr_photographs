@@ -223,7 +223,7 @@ html, body {{ height: 100%; background: var(--bg); color: var(--text);
 #main-img {{
   max-width: 100%; max-height: 100%;
   object-fit: contain;
-  transition: opacity .35s ease;
+  transition: opacity .5s ease-in-out;
   user-select: none;
 }}
 #main-img.fade {{ opacity: 0; }}
@@ -314,11 +314,12 @@ html, body {{ height: 100%; background: var(--bg); color: var(--text);
   max-width: calc(100vw - 160px);
   max-height: calc(100vh - 140px);
   object-fit: contain;
-  transition: opacity .25s;
+  transition: opacity .5s ease-in-out;
   border: 4px solid #FFD700;
   border-radius: 4px;
   box-shadow: 0 0 24px rgba(255,215,0,.55);
 }}
+#fs-img.fade {{ opacity: 0; }}
 #fs-close {{
   position: fixed; top: 16px; right: 20px;
   background: rgba(0,0,0,.6); border: 1px solid var(--border);
@@ -517,8 +518,6 @@ let galIdx   = 0;   // current gallery index
 let imgIdx   = 0;   // current image index within gallery
 let playing  = false;
 let timer    = null;
-let fsPlaying = false;
-let fsTimer   = null;
 let fsOpen   = false;
 let notesVisible = true;
 
@@ -587,20 +586,30 @@ function showImage(idx, animate=true) {{
   const fname = item.src.split("/").pop();
   const note  = item.note || "";
 
+  // Cross-image fade: opacity 1 → 0 → swap → 0 → 1. The timeout matches the
+  // CSS transition duration (.5s) so the image is fully invisible at the
+  // moment of swap.
+  const FADE_MS = 500;
   if (animate) {{
     mainImg.classList.add("fade");
+    if (fsOpen) fsImg.classList.add("fade");
     setTimeout(() => {{
       mainImg.src = src;
-      mainImg.onload = () => mainImg.classList.remove("fade");
-      mainImg.onerror = () => {{ mainImg.classList.remove("fade"); }};
-    }}, 180);
+      mainImg.onload  = () => mainImg.classList.remove("fade");
+      mainImg.onerror = () => mainImg.classList.remove("fade");
+      if (fsOpen) {{
+        fsImg.src = src;
+        fsImg.onload  = () => fsImg.classList.remove("fade");
+        fsImg.onerror = () => fsImg.classList.remove("fade");
+      }}
+    }}, FADE_MS);
   }} else {{
     mainImg.src = src;
+    if (fsOpen) fsImg.src = src;
   }}
 
-  // fullscreen sync
+  // fullscreen position indicator (image src is handled above)
   if (fsOpen) {{
-    fsImg.src = src;
     updateFsPos();
   }}
 
@@ -653,17 +662,32 @@ function switchGallery(i) {{
 }}
 
 /* ── autoplay ─────────────────────────────────────────────────────────────── */
+/* One autoplay state, two button views. The fullscreen play button and the
+   main play button are simply mirrors of the same `playing` flag — there's
+   no separate fs timer that could drift or double-fire alongside the main
+   one. Same idea for the two speed dropdowns: they're kept in sync, and
+   scheduleNext() reads whichever is canonical (speedSel). */
+function syncPlayButtons() {{
+  const fsPlay = $("fs-play");
+  if (playing) {{
+    btnPlay.textContent = "⏸ Pause";
+    btnPlay.classList.add("active");
+    if (fsPlay) {{ fsPlay.textContent = "⏸ Pause"; fsPlay.classList.add("active"); }}
+  }} else {{
+    btnPlay.textContent = "▶ Play";
+    btnPlay.classList.remove("active");
+    if (fsPlay) {{ fsPlay.textContent = "▶ Play"; fsPlay.classList.remove("active"); }}
+  }}
+}}
 function startPlay() {{
   playing = true;
-  btnPlay.textContent = "⏸ Pause";
-  btnPlay.classList.add("active");
+  syncPlayButtons();
   scheduleNext();
 }}
 function stopPlay() {{
   playing = false;
-  btnPlay.textContent = "▶ Play";
-  btnPlay.classList.remove("active");
   clearTimeout(timer);
+  syncPlayButtons();
 }}
 function togglePlay() {{ playing ? stopPlay() : startPlay(); }}
 function scheduleNext() {{
@@ -710,42 +734,19 @@ function openFs() {{
     fsNoteEl.innerHTML = note;
     fsNoteEl.style.display = (note && notesVisible) ? "block" : "none";
   }}
+  // Make sure the fullscreen UI mirrors the canonical autoplay state.
+  const fsSpeed = $("fs-speed");
+  if (fsSpeed) fsSpeed.value = speedSel.value;
+  syncPlayButtons();
   fsOverlay.classList.add("visible");
   updateFsPos();
   showFsCtrl();
 }}
 function closeFs() {{
   fsOpen = false;
-  stopFsPlay();
   fsOverlay.classList.remove("visible");
-}}
-function startFsPlay() {{
-  fsPlaying = true;
-  $("fs-play").textContent = "⏸ Pause";
-  $("fs-play").classList.add("active");
-  scheduleFsNext();
-}}
-function stopFsPlay() {{
-  fsPlaying = false;
-  clearTimeout(fsTimer);
-  const btn = $("fs-play");
-  if (btn) {{ btn.textContent = "▶ Play"; btn.classList.remove("active"); }}
-}}
-function toggleFsPlay() {{ fsPlaying ? stopFsPlay() : startFsPlay(); }}
-function scheduleFsNext() {{
-  clearTimeout(fsTimer);
-  const delay = parseInt($("fs-speed").value, 10);
-  fsTimer = setTimeout(() => {{
-    if (!fsPlaying) return;
-    const gal = DATA.galleries[galIdx];
-    if (imgIdx + 1 >= gal.images.length) {{
-      const next = (galIdx + 1) % DATA.galleries.length;
-      switchGallery(next);
-    }} else {{
-      showImage(imgIdx + 1);
-    }}
-    scheduleFsNext();
-  }}, delay);
+  // Autoplay is unified — closing fullscreen does NOT stop the slideshow.
+  // If the user wants to stop, they press the (now-mirrored) Play/Pause button.
 }}
 
 /* ── keyboard ─────────────────────────────────────────────────────────────── */
@@ -783,10 +784,25 @@ function toggleNotes() {{
 $("btn-shuffle").addEventListener("click", shuffleGallery);
 $("btn-fs").addEventListener("click", openFs);
 $("fs-close").addEventListener("click", closeFs);
-$("fs-play").addEventListener("click", toggleFsPlay);
+$("fs-play").addEventListener("click", togglePlay);   // mirrors the main play button
 $("fs-prev").addEventListener("click", () => {{ goPrev(); }});
 $("fs-next").addEventListener("click", () => {{ goNext(); }});
 $("toggle-sidebar").addEventListener("click", () => sidebar.classList.toggle("open"));
+
+/* Keep the two speed dropdowns in sync. Changing the delay in either view
+   updates the other so the autoplay rate is consistent no matter where the
+   user looked last. */
+const fsSpeedSel = $("fs-speed");
+if (fsSpeedSel) {{
+  speedSel.addEventListener("change", () => {{
+    fsSpeedSel.value = speedSel.value;
+    if (playing) scheduleNext();  // apply new rate immediately
+  }});
+  fsSpeedSel.addEventListener("change", () => {{
+    speedSel.value = fsSpeedSel.value;
+    if (playing) scheduleNext();
+  }});
+}}
 
 /* ── touch swipe ──────────────────────────────────────────────────────────── */
 let touchX = null;
