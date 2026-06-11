@@ -1099,7 +1099,13 @@ document.addEventListener('DOMContentLoaded', function() {{
             prev_index = i - 1 if i > 0 else len(photos) - 1
             next_index = i + 1 if i < len(photos) - 1 else 0
             note_text = notes.get(photo_file, '').strip()
-            caption_html = f'\n            <div class="photo-caption">{note_text}</div>' if note_text else ''
+            # Header subtitle: show the photo's caption in the prime spot under
+            # the gallery name when it has one; otherwise fall back to the
+            # "Photo N of M" position counter.
+            header_subtitle = note_text if note_text else f"Photo {i + 1} of {len(photos)}"
+            # The caption now lives in the header, so it isn't repeated beneath
+            # the image.
+            caption_html = ''
 
             # Actions row above the gallery nav: a Download Image button
             # (always), plus a Read More button when this photo has extended
@@ -1129,7 +1135,7 @@ document.addEventListener('DOMContentLoaded', function() {{
 <body>
     <header>
         <h1>{gallery_name}</h1>
-        <h2>Photo {i + 1} of {len(photos)}</h2>
+        <h2>{header_subtitle}</h2>
     </header>
 
     <div class="container">
