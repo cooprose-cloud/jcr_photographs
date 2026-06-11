@@ -128,9 +128,10 @@ def collect_directories(user_dir: Path) -> Dict[str, str]:
     output_dir  = ask("Output directory (generated website)", default_output)
     support_dir = ask("Support files directory (css/logo/js)", default_support)
 
+    # Store absolute paths even if the user typed a relative one at the prompt.
     return {
-        'output_directory':         output_dir,
-        'support_files_directory':  support_dir,
+        'output_directory':         str(Path(output_dir).expanduser().resolve()),
+        'support_files_directory':  str(Path(support_dir).expanduser().resolve()),
     }
 
 
@@ -150,6 +151,7 @@ def collect_galleries(user_dir: Path) -> List[Dict[str, Any]]:
     candidates = sorted(
         d for d in user_dir.iterdir()
         if d.is_dir() and d.name not in SKIP_DIRS and not d.name.startswith('.')
+        and not d.name.lower().endswith('_original')  # skip full-res backup folders
     )
 
     if not candidates:
@@ -266,6 +268,7 @@ def generate_form(user_dir: Path):
         d for d in user_dir.iterdir()
         if d.is_dir() and d.name.lower() not in {s.lower() for s in SKIP_DIRS}
         and not d.name.startswith('.')
+        and not d.name.lower().endswith('_original')  # skip full-res backup folders
     )
 
     galleries = []
@@ -404,6 +407,12 @@ def main():
         print("  This is the folder where your gallery subfolders live.")
         raw = ask("Path to your user_files directory")
         user_dir = Path(raw).expanduser()
+
+    # Resolve to an absolute path so every derived path (gallery
+    # source_directory, output_directory, support_files_directory) is stored
+    # absolute in the config. The build then works regardless of the current
+    # working directory — avoiding the relative-path "missing tiles" failure.
+    user_dir = user_dir.resolve()
 
     if not user_dir.exists():
         print(f"\n  ERROR: Directory not found: {user_dir}")

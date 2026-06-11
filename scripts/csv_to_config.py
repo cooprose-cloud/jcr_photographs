@@ -23,8 +23,18 @@ photos.csv columns (header row required):
     photo_file        filename only        e.g.  IMG_001.jpg
     note              caption (can be blank)
     in_slideshow      yes or no
-    slideshow_order   1-based position in the home-page slideshow
-                      (blank for rows where in_slideshow is "no")
+    seq               OPTIONAL — integer that sets photo order WITHIN its
+                      gallery. Number sparsely (10, 20, 30...) so you can
+                      insert photos later without renumbering. If the column
+                      is absent or blank for every row, CSV row order is used.
+                      Blank rows in a partially-numbered gallery are placed
+                      after the numbered ones.
+    notes_title       OPTIONAL — heading for the layer-4 "Read more" page
+    notes_body        OPTIONAL — body text for the layer-4 "Read more" page
+                      Use literal \\n\\n for paragraph breaks, or quote the
+                      cell in your spreadsheet and use real newlines.
+                      If a sidecar .md file exists next to the photo, it
+                      takes precedence over this column.
 
 site_settings.csv columns:
     field             setting name
@@ -40,6 +50,32 @@ import sys
 from pathlib import Path
 from collections import OrderedDict
 
+# The project root is the folder that contains this script's parent — i.e. the
+# directory holding system_files/ and user_files/. Relative paths in the CSVs
+# (output_directory, source_directory) are interpreted relative to THIS root,
+# not the shell's current directory, and are stored in the config as absolute
+# paths. That way the build works no matter what folder the tools are launched
+# from. (See the "missing tiles" failure mode: relative paths + wrong cwd.)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _absolutize(path_str: str) -> str:
+    """Return an absolute version of a path string from the CSVs.
+
+    - Blank stays blank.
+    - '~' is expanded.
+    - Absolute paths are returned unchanged (just normalized).
+    - Relative paths are resolved against PROJECT_ROOT, so 'user_files/pets'
+      and 'website' resolve correctly regardless of the current directory.
+    """
+    s = (path_str or "").strip()
+    if not s:
+        return s
+    p = Path(s).expanduser()
+    if not p.is_absolute():
+        p = PROJECT_ROOT / p
+    return str(p.resolve())
+
 # ── Sample CSV content ────────────────────────────────────────────────────────
 
 SAMPLE_SITE = """\
@@ -51,7 +87,6 @@ photographer_name,Your Name
 date_published,2026
 copyright_year,2026
 output_directory,./output
-support_files_directory,
 thumbnail_width,300
 thumbnail_height,300
 thumbnail_display_size,280
@@ -61,12 +96,12 @@ slideshow_show_captions,yes
 """
 
 SAMPLE_PHOTOS = """\
-gallery_id,gallery_name,gallery_desc,source_directory,photo_file,note,in_slideshow,slideshow_order
-family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_001.jpg,Aunt Clara and Uncle Bob,yes,1
-family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_002.jpg,,no,
-family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_003.jpg,The old farmhouse,no,
-vacation_1965,Summer Vacation 1965,,/Users/yourname/Photos/vacation65,scan001.jpg,Niagara Falls,yes,2
-vacation_1965,Summer Vacation 1965,,/Users/yourname/Photos/vacation65,scan002.jpg,,no,
+gallery_id,gallery_name,gallery_desc,source_directory,photo_file,note,in_slideshow,seq,notes_title,notes_body
+family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_001.jpg,Aunt Clara and Uncle Bob,yes,10,Aunt Clara's Last Reunion,"Clara had been ill for some months by the time this photograph was taken.\\n\\nUncle Bob drove her down from Vermont so she could see everyone one more time."
+family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_002.jpg,,no,20,,
+family_reunion,Family Reunion,Photos from the 1962 reunion,/Users/yourname/Photos/reunion,IMG_003.jpg,The old farmhouse,no,30,,
+vacation_1965,Summer Vacation 1965,,/Users/yourname/Photos/vacation65,scan001.jpg,Niagara Falls,yes,10,,
+vacation_1965,Summer Vacation 1965,,/Users/yourname/Photos/vacation65,scan002.jpg,,no,20,,
 """
 
 # ── Readers ───────────────────────────────────────────────────────────────────
@@ -112,15 +147,56 @@ def read_photos(path: Path) -> list[dict]:
                 "photo_file":        photo_file,
                 "note":              row.get("note",              "").strip(),
                 "in_slideshow":      row.get("in_slideshow", "no").strip().lower() == "yes",
-                # Optional slideshow_order column (added in Fix B). Missing
-                # values are passed through as empty string and treated as
-                # "no explicit order" by build_config.
-                "slideshow_order":   row.get("slideshow_order", "").strip(),
+                "seq":               row.get("seq",               "").strip(),
+                "notes_title":       row.get("notes_title",       "").strip(),
+                "notes_body":        row.get("notes_body",        "").strip(),
             })
     return rows
 
 
 # ── Builder ───────────────────────────────────────────────────────────────────
+
+def _apply_sequencing(rows_by_gallery: "OrderedDict[str, list[dict]]"):
+    """Sort each gallery's rows by the integer 'seq' column, in place.
+
+    Numbered rows come first in ascending order; rows with a blank or
+    non-numeric seq keep their CSV order and are placed after the numbered
+    ones. Duplicate or invalid values fall back to CSV order and a warning
+    is printed.
+    """
+    for gid, grows in rows_by_gallery.items():
+        parsed = []
+        seen_seq = {}
+        blanks = 0
+        for row in grows:
+            raw = row.get("seq", "").strip()
+            if raw == "":
+                blanks += 1
+                seqval = None
+            else:
+                try:
+                    seqval = int(raw)
+                except ValueError:
+                    print(f"WARNING: gallery '{gid}': seq value {raw!r} for "
+                          f"'{row['photo_file']}' is not an integer — ignored")
+                    seqval = None
+                else:
+                    if seqval in seen_seq:
+                        print(f"WARNING: gallery '{gid}': duplicate seq {seqval} "
+                              f"('{seen_seq[seqval]}' and '{row['photo_file']}') "
+                              f"— order between them falls back to CSV order")
+                    else:
+                        seen_seq[seqval] = row["photo_file"]
+            parsed.append((seqval, row["_csv_order"], row))
+
+        if blanks and blanks != len(grows):
+            print(f"WARNING: gallery '{gid}': {blanks} photo(s) have a blank seq "
+                  f"— they will be ordered after the numbered photos")
+
+        # Numbered rows first (by seq), then blanks; CSV order breaks ties.
+        parsed.sort(key=lambda t: (t[0] is None, t[0] if t[0] is not None else 0, t[1]))
+        rows_by_gallery[gid] = [t[2] for t in parsed]
+
 
 def build_config(settings: dict, rows: list[dict]) -> dict:
     """Assemble the photo_config.json structure."""
@@ -132,100 +208,83 @@ def build_config(settings: dict, rows: list[dict]) -> dict:
             print(f"WARNING: '{key}' in site_settings.csv is not a number — using {default}")
             return default
 
-    max_galleries     = settings.get("max_galleries", "").strip()
-    support_files_dir = settings.get("support_files_directory", "").strip()
+    max_galleries = settings.get("max_galleries", "").strip()
 
-    # Build the config dict incrementally so the top-level keys land in the
-    # same order generate_photo_config.py emits them. This makes a clean
-    # round-trip through CSV byte-equivalent, which keeps `diff` quiet and
-    # version-control history meaningful.
-    config = {}
-
-    # site_info — field order matches generate_photo_config.py output
-    # (title, subtitle, photographer_name, overview, date_published,
-    # copyright_year). Picking a fixed order here also keeps diffs clean.
-    config["site_info"] = {
-        "title":              settings.get("title",              "My Photo Gallery"),
-        "subtitle":           settings.get("subtitle",           ""),
-        "photographer_name":  settings.get("photographer_name",  ""),
-        "overview":           settings.get("overview",           ""),
-        "date_published":     settings.get("date_published",     ""),
-        "copyright_year":     settings.get("copyright_year",     ""),
+    config = {
+        "output_directory": _absolutize(settings.get("output_directory", "./output")),
+        "thumbnail_size": [
+            intval("thumbnail_width",  300),
+            intval("thumbnail_height", 300),
+        ],
+        "thumbnail_display_size": intval("thumbnail_display_size", 280),
+        "max_galleries": int(max_galleries) if max_galleries else None,
+        "site_info": {
+            "title":              settings.get("title",              "My Photo Gallery"),
+            "subtitle":           settings.get("subtitle",           ""),
+            "overview":           settings.get("overview",           ""),
+            "photographer_name":  settings.get("photographer_name",  ""),
+            "date_published":     settings.get("date_published",     ""),
+            "copyright_year":     settings.get("copyright_year",     ""),
+        },
+        "slideshow_config": {
+            "interval_seconds": intval("slideshow_interval_seconds", 5),
+            "show_captions":    settings.get("slideshow_show_captions", "yes").lower() == "yes",
+        },
+        "slideshow_photos": [],
+        "galleries": [],
     }
 
-    config["output_directory"] = settings.get("output_directory", "./output")
-
-    # Fix A: preserve support_files_directory when it has a value. Grouped
-    # with output_directory because both are filesystem path settings.
-    if support_files_dir:
-        config["support_files_directory"] = support_files_dir
-
-    config["thumbnail_size"] = [
-        intval("thumbnail_width",  300),
-        intval("thumbnail_height", 300),
-    ]
-    config["thumbnail_display_size"] = intval("thumbnail_display_size", 280)
-
-    # Fix C: only emit max_galleries when the user actually set it.
-    if max_galleries:
-        try:
-            config["max_galleries"] = int(max_galleries)
-        except ValueError:
-            print(f"WARNING: 'max_galleries' in site_settings.csv is not a number — omitting")
-
-    config["slideshow_config"] = {
-        "interval_seconds": intval("slideshow_interval_seconds", 5),
-        "show_captions":    settings.get("slideshow_show_captions", "yes").lower() == "yes",
-    }
-
-    # galleries and slideshow_photos populate below. Initialize in the
-    # order generate_photo_config.py uses (galleries then slideshow_photos)
-    # so the round-trip diff stays clean.
-    config["galleries"] = []
-    config["slideshow_photos"] = []
-
-    # Build galleries in the order first encountered
+    # Galleries appear in the order first encountered in the CSV
     gallery_order = list(OrderedDict.fromkeys(r["gallery_id"] for r in rows))
+
+    # Group rows by gallery, preserving CSV order within each group
+    rows_by_gallery = OrderedDict((gid, []) for gid in gallery_order)
+    for idx, row in enumerate(rows):
+        row["_csv_order"] = idx
+        rows_by_gallery[row["gallery_id"]].append(row)
+
+    # Optional per-gallery ordering via the 'seq' column. Only applied when at
+    # least one row supplies a value; otherwise CSV row order is preserved.
+    if any(r.get("seq", "").strip() for r in rows):
+        _apply_sequencing(rows_by_gallery)
+
     gallery_meta  = {}   # id → {name, desc, source_directory}
     gallery_photos = {}  # id → [photo_file, ...]
     gallery_notes  = {}  # id → {photo_file: note}
-    slideshow_picks = []  # [(slideshow_order, gallery_id, photo_file)]
+    gallery_xnotes = {}  # id → {photo_file: {"title": ..., "body": ...}}
 
-    for row in rows:
-        gid = row["gallery_id"]
-        if gid not in gallery_meta:
-            gallery_meta[gid] = {
-                "name":             row["gallery_name"],
-                "description":      row["gallery_desc"],
-                "source_directory": row["source_directory"],
-            }
-            gallery_photos[gid] = []
-            gallery_notes[gid]  = {}
+    for gid in gallery_order:
+        grows = rows_by_gallery[gid]
+        first = grows[0]
+        gallery_meta[gid] = {
+            "name":             first["gallery_name"],
+            "description":      first["gallery_desc"],
+            "source_directory": _absolutize(first["source_directory"]),
+        }
+        gallery_photos[gid] = []
+        gallery_notes[gid]  = {}
+        gallery_xnotes[gid] = {}
 
-        pf = row["photo_file"]
-        if pf not in gallery_photos[gid]:
-            gallery_photos[gid].append(pf)
-        gallery_notes[gid][pf] = row["note"]
+        for row in grows:
+            pf = row["photo_file"]
+            if pf not in gallery_photos[gid]:
+                gallery_photos[gid].append(pf)
+            gallery_notes[gid][pf] = row["note"]
 
-        if row["in_slideshow"]:
-            # Fix B: respect slideshow_order if the column is present and
-            # parseable. Rows with a missing or unparseable order sort to
-            # the end in row-encounter order.
-            order_raw = row.get("slideshow_order", "")
-            try:
-                order = int(order_raw) if str(order_raw).strip() else None
-            except ValueError:
-                order = None
-            slideshow_picks.append((order, len(slideshow_picks), gid, pf))
+            # Extended notes — only stored if notes_body is non-blank
+            xbody  = row.get("notes_body",  "")
+            xtitle = row.get("notes_title", "")
+            if xbody:
+                gallery_xnotes[gid][pf] = {
+                    "title": xtitle,
+                    "body":  xbody,
+                }
 
-    # Sort: explicit orders first (ascending), then anything without an order
-    # in original row-encounter order. The secondary key (insertion index)
-    # keeps the sort stable.
-    slideshow_picks.sort(key=lambda t: (t[0] is None, t[0] if t[0] is not None else 0, t[1]))
-    config["slideshow_photos"] = [
-        {"gallery_id": gid, "photo_file": pf}
-        for _order, _idx, gid, pf in slideshow_picks
-    ]
+            if row["in_slideshow"]:
+                config["slideshow_photos"].append({
+                    "gallery_id": gid,
+                    "photo_file": pf,
+                })
 
     for gid in gallery_order:
         meta = gallery_meta[gid]
@@ -236,6 +295,7 @@ def build_config(settings: dict, rows: list[dict]) -> dict:
             "source_directory": meta["source_directory"],
             "photos":           gallery_photos[gid],
             "notes":            gallery_notes[gid],
+            "extended_notes":   gallery_xnotes[gid],
         })
 
     return config
@@ -302,9 +362,8 @@ def main():
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
-        # No trailing newline — matches generate_photo_config.py's output
-        # so a clean round-trip is byte-equivalent.
         json.dump(config, f, indent=2, ensure_ascii=False)
+        f.write("\n")
 
     gcount = len(config["galleries"])
     pcount = sum(len(g["photos"]) for g in config["galleries"])
