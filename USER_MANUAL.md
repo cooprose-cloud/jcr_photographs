@@ -15,6 +15,21 @@ photo, and optional "Read More" pages for the photos you want to write about.
 > [section 2, Requirements and first-time setup](#2-requirements-and-first-time-setup) —
 > it walks you from an empty folder to a finished site.
 
+> **On Windows?** The commands in this manual are shown in macOS/Linux form.
+> On Windows they work the same with three small substitutions:
+>
+> - Type **`python`** (or **`py`**) instead of `python3`.
+> - Type **`pip`** (or **`py -m pip`**) instead of `pip3`.
+> - To open the finished site, use **`start website\index.html`** (or just
+>   double-click `index.html`) instead of `open`.
+>
+> Forward slashes in paths work on Windows too, so the only change you really
+> need is `python3` → `python`. Everything else — Pillow, the scripts, the
+> generated website — behaves identically. One tip: if you ever hand-edit
+> `photo_config.json` on Windows, write paths with forward slashes
+> (`C:/Users/You/...`) or doubled backslashes (`C:\\Users\\You\\...`); the
+> tools always write them correctly on their own.
+
 ---
 
 ## Table of contents
@@ -474,9 +489,9 @@ but it helps to understand its shape.
 ```jsonc
 {
   "site_info": {
-    "title":             "Photographs by J. Cooper Rose",
+    "title":             "Photographs by X, Y. Z",
     "subtitle":          "A Photographic Journey",
-    "photographer_name": "J. Cooper Rose",
+    "photographer_name": "X. Y. Z",
     "overview":          "Welcome to my photographic collection.",
     "date_published":    "May 2026",
     "copyright_year":    "2026"
